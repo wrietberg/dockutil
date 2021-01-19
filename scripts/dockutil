@@ -36,73 +36,55 @@ usage:     %(progname)s --add <path to item> | <url> [--label <label>] [ folder_
 usage:     %(progname)s --remove <dock item label> | <app bundle id> | all | spacer-tiles [--no-restart] [ plist_location_specification ]
 usage:     %(progname)s --move <dock item label>  position_options [ plist_location_specification ]
 usage:     %(progname)s --find <dock item label> [ plist_location_specification ]
+usage:     %(progname)s --findinpath <part of path> [ plist_location_specification ]
 usage:     %(progname)s --list [ plist_location_specification ]
 usage:     %(progname)s --version
-
 position_options:
   --replacing <dock item label name>                            replaces the item with the given dock label or adds the item to the end if item to replace is not found
   --position [ index_number | beginning | end | middle ]        inserts the item at a fixed position: can be an position by index number or keyword
   --after <dock item label name>                                inserts the item immediately after the given dock label or at the end if the item is not found
   --before <dock item label name>                               inserts the item immediately before the given dock label or at the end if the item is not found
   --section [ apps | others ]                                   specifies whether the item should be added to the apps or others section
-
 plist_location_specifications:
   <path to a specific plist>                                    default is the dock plist for current user
   <path to a home directory>
   --allhomes                                                    attempts to locate all home directories and perform the operation on each of them
   --homeloc                                                     overrides the default /Users location for home directories
-
 folder_options:
   --view [grid|fan|list|auto]                                   stack view option
   --display [folder|stack]                                      how to display a folder's icon
   --sort [name|dateadded|datemodified|datecreated|kind]         sets sorting option for a folder view
-
 global_options:
   -v                                                            verbose output
-
 Examples:
   The following adds TextEdit.app to the end of the current user's dock:
            %(progname)s --add /Applications/TextEdit.app
-
   The following replaces Time Machine with TextEdit.app in the current user's dock:
            %(progname)s --add /Applications/TextEdit.app --replacing 'Time Machine'
-
   The following adds TextEdit.app after the item Time Machine in every user's dock on that machine:
            %(progname)s --add /Applications/TextEdit.app --after 'Time Machine' --allhomes
-
   The following adds ~/Downloads as a grid stack displayed as a folder for every user's dock on that machine:
            %(progname)s --add '~/Downloads' --view grid --display folder --allhomes
-
   The following adds a url dock item after the Downloads dock item for every user's dock on that machine:
            %(progname)s --add vnc://miniserver.local --label 'Mini VNC' --after Downloads --allhomes
-
   The following removes System Preferences from every user's dock on that machine:
            %(progname)s --remove 'System Preferences' --allhomes
-
   The following moves System Preferences to the second slot on every user's dock on that machine:
            %(progname)s --move 'System Preferences' --position 2 --allhomes
-
   The following finds any instance of iTunes in the specified home directory's dock:
            %(progname)s --find iTunes /Users/jsmith
-
   The following lists all dock items for all home directories at homeloc in the form: item<tab>path<tab><section>tab<plist>
            %(progname)s --list --homeloc /Volumes/RAID/Homes --allhomes
-
   The following adds Firefox after Safari in the Default User Template without restarting the Dock
            %(progname)s --add /Applications/Firefox.app --after Safari --no-restart '/System/Library/User Template/English.lproj'
-
   The following adds a spacer tile in the apps section after Mail
            %(progname)s --add '' --type spacer --section apps --after Mail
            %(progname)s --add '' --type small-spacer --section apps --after Mail
            %(progname)s --add '' --type flex-spacer --section apps --after Mail
-
   The following removes all spacer tiles
            %(progname)s --remove spacer-tiles
-
 Notes:
   When specifying a relative path like ~/Documents with the --allhomes option, ~/Documents must be quoted like '~/Documents' to get the item relative to each home
-
-
 Contact:
   Send bug reports and comments to kcrwfrd at gmail.
 """ % dict(progname = os.path.basename(sys.argv[0]))
@@ -125,7 +107,7 @@ def main():
     # setup our getoput opts and args
     try:
         (optargs, args) = getopt.getopt(sys.argv[1:], 'hv', ["help", "version",
-            "section=", "list", "find=", "add=", "move=", "replacing=",
+            "section=", "list", "find=", "findinpath=", "add=", "move=", "replacing=",
             "remove=", "after=", "before=", "position=", "display=", "view=",
             "sort=", "label=", "type=", "allhomes", "homeloc=", "no-restart", "hupdock="])
     except getopt.GetoptError, e:  # if parsing of options fails, display usage and parse error
@@ -136,6 +118,7 @@ def main():
     add_path = None
     remove_labels = []
     find_label = None
+    find_path = None
     move_label = None
     after_item = None
     before_item = None
@@ -170,6 +153,8 @@ def main():
             move_label = arg
         elif opt == "--find":
             find_label = arg
+        elif opt == "--findinpath":
+            find_path = arg
         elif opt == "--remove":
             remove_labels.append(arg)
         elif opt == "--after":
@@ -230,7 +215,7 @@ def main():
                 restart_dock = False
 
     # check for an action
-    if add_path == None and not remove_labels and move_label == None and find_label == None and list == False:
+    if add_path == None and not remove_labels and move_label == None and find_label == None and find_path == None and list == False:
         usage('no action was specified')
 
 
@@ -334,6 +319,32 @@ def main():
                             pass
             if not item_found:
                 print find_label, "was not found in", plist_path
+                if not all_homes:  # only exit non-zero if we aren't processing all homes, because for allhomes, exit status for find would be irrelevant
+                    sys.exit(1)
+
+        elif find_path != None: # --find-path action
+            # correct unicode names handling
+            find_path = find_path.decode('utf-8')
+            # since we are only reading the plist, make a copy before converting it to be read
+            pl = readPlist(plist_path)
+            # set found state
+            item_found = False
+            # loop through dock items looking for a match with provided find_label
+            for section in ['persistent-apps', 'persistent-others']:
+                for item_offset in range(len(pl[section])):
+                    try:
+                        if find_path in pl[section][item_offset]['tile-data']['file-data']['_CFURLString']:
+                            item_found = True
+                            print find_path, "was found in", section, "at slot", item_offset+1, "in", plist_path
+                    except:
+                        try:
+                            if pl[section][item_offset]['tile-data']['label'] == find_path:
+                                item_found = True
+                                print find_path, "was found in", section, "at slot", item_offset+1, "in", plist_path
+                        except:
+                            pass
+            if not item_found:
+                print find_path, "was not found in", plist_path
                 if not all_homes:  # only exit non-zero if we aren't processing all homes, because for allhomes, exit status for find would be irrelevant
                     sys.exit(1)
 
